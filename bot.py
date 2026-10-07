@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from os import getenv
+import os
 from aiogram import Bot, Dispatcher, html
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -10,12 +10,11 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from aiohttp import web
 
 # --- Конфигурация ---
-# Токен будет браться из переменной окружения, которую мы зададим на Render
-TOKEN = getenv("BOT_TOKEN")
+# Токен берём из переменной окружения BOT_TOKEN (задаётся на Render)
+TOKEN = os.getenv("BOT_TOKEN")
 
-# Render автоматически присваивает приложению домен формата <app-name>.onrender.com
-# Замените 'my-telegram-bot' на имя, которое вы дадите сервису на Render
-WEBHOOK_HOST = "https://bot-tg-141n.onrender.com"
+# Render автоматически подставляет URL вашего сервиса в RENDER_EXTERNAL_URL
+WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL")
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
@@ -23,7 +22,7 @@ WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# --- Обработчики (ваша логика) ---
+# --- Обработчики ---
 @dp.message(CommandStart())
 async def command_start_handler(message: Message) -> None:
     await message.answer(f"Привет, {html.bold(message.from_user.full_name)}! Бот работает через Webhook на Render.")
@@ -56,4 +55,6 @@ def main() -> web.Application:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    web.run_app(main(), host="0.0.0.0", port=8080)
+    # Render сам задаёт порт через переменную PORT, по умолчанию 8080
+    port = int(os.getenv("PORT", 8080))
+    web.run_app(main(), host="0.0.0.0", port=port)
