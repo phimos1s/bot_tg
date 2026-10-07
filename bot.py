@@ -15,7 +15,7 @@ TOKEN = getenv("BOT_TOKEN")
 
 # Render автоматически присваивает приложению домен формата <app-name>.onrender.com
 # Замените 'my-telegram-bot' на имя, которое вы дадите сервису на Render
-WEBHOOK_HOST = "https://my-telegram-bot.onrender.com"
+WEBHOOK_HOST = "https://bot-tg-141n.onrender.com"
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
