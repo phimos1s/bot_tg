@@ -15,6 +15,13 @@ TOKEN = os.getenv("BOT_TOKEN")
 
 # Render автоматически подставляет URL вашего сервиса в RENDER_EXTERNAL_URL
 WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL")
+
+# Проверка, чтобы не запустился с пустыми значениями
+if not TOKEN:
+    raise ValueError("Не задана переменная окружения BOT_TOKEN!")
+if not WEBHOOK_HOST:
+    raise ValueError("Не задана переменная окружения RENDER_EXTERNAL_URL! (Render обычно делает это сам)")
+
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
@@ -55,6 +62,6 @@ def main() -> web.Application:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    # Render сам задаёт порт через переменную PORT, по умолчанию 8080
-    port = int(os.getenv("PORT", 8080))
-    web.run_app(main(), host="0.0.0.0", port=port)
+    # ВАЖНО: Render требует порт 10000 по умолчанию.
+    # Если не указать его явно, Render будет постоянно перезапускать бота.
+    web.run_app(main(), host="0.0.0.0", port=10000)
