@@ -15,10 +15,10 @@ from aiocryptopay import AioCryptoPay, Networks
 from aiocryptopay.models.update import Update as CryptoUpdate
 
 # --- Конфигурация ---
-TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL")
-CRYPTO_PAY_TOKEN = os.getenv("CRYPTO_PAY_TOKEN")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "my_secret_path_2026")
+TOKEN = os.getenv("8717747702:AAEVSzoUdkJA8opDiwlkh1LmiAhYygFvqvo")
+WEBHOOK_HOST = os.getenv("https://bot-tg-141n.onrender.com")
+CRYPTO_PAY_TOKEN = os.getenv("646017:AAZ36CYHM1ZLSRfn1lpCk4vyr6yDiy8SVAz")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "fgopf7879")
 
 if not TOKEN:
     raise ValueError("Не задана переменная окружения BOT_TOKEN!")
