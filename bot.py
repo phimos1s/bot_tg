@@ -2,11 +2,11 @@ import asyncio
 import logging
 import os
 import traceback
-from aiogram import Bot, Dispatcher, html
+from aiogram import Bot, Dispatcher, html, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import CommandStart
-from aiogram.types import Message
+from aiogram.filters import CommandStart, Command
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
@@ -26,10 +26,97 @@ WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
+
+# --- Главное меню (inline-клавиатура) ---
+def get_main_menu() -> InlineKeyboardMarkup:
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="personal_cabinet")],
+            [InlineKeyboardButton(text="⭐ Купить звёзды", callback_data="buy_stars")],
+            [InlineKeyboardButton(text="🤝 Реферальная система", callback_data="referral_system")],
+        ]
+    )
+    return keyboard
+
+
 # --- Обработчики ---
 @dp.message(CommandStart())
 async def command_start_handler(message: Message) -> None:
-    await message.answer(f"Привет, {html.bold(message.from_user.full_name)}! Я ТЕБЕ ЕБЛО СЛОМАЮ.")
+    user_name = html.bold(message.from_user.full_name) if message.from_user else "друг"
+    await message.answer(
+        f"Привет, {user_name}! 👋\n\n"
+        f"Я бот-магазин. Выбери, что тебя интересует, с помощью кнопок ниже 👇",
+        reply_markup=get_main_menu(),
+    )
+
+
+@dp.callback_query(F.data == "personal_cabinet")
+async def personal_cabinet_handler(callback: CallbackQuery) -> None:
+    await callback.answer()  # убираем «часики» на кнопке
+    user_id = callback.from_user.id
+    # TODO: здесь можно подтянуть данные пользователя из БД
+    text = (
+        f"👤 <b>Личный кабинет</b>\n\n"
+        f"🆔 Ваш ID: <code>{user_id}</code>\n"
+        f"⭐ Баланс звёзд: <b>0</b>\n"
+        f"💎 Статус: <b>Обычный пользователь</b>\n\n"
+        f"Пополнить баланс можно в разделе «Купить звёзды»."
+    )
+    await callback.message.edit_text(text, reply_markup=get_main_menu())
+
+
+@dp.callback_query(F.data == "buy_stars")
+async def buy_stars_handler(callback: CallbackQuery) -> None:
+    await callback.answer()
+    text = (
+        "⭐ <b>Купить звёзды</b>\n\n"
+        "Здесь будет список товаров. Например:\n\n"
+        "• 50 звёзд — 100 ₽\n"
+        "• 100 звёзд — 180 ₽\n"
+        "• 500 звёзд — 800 ₽\n\n"
+        "🔧 Раздел в разработке. Скоро будет доступен!"
+    )
+    # Кнопка «Назад» для возврата в меню
+    back_kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_menu")]]
+    )
+    await callback.message.edit_text(text, reply_markup=back_kb)
+
+
+@dp.callback_query(F.data == "referral_system")
+async def referral_handler(callback: CallbackQuery) -> None:
+    await callback.answer()
+    user_id = callback.from_user.id
+    # Формируем реферальную ссылку
+    bot_info = await bot.get_me()
+    ref_link = f"https://t.me/{bot_info.username}?start=ref_{user_id}"
+    text = (
+        "🤝 <b>Реферальная система</b>\n\n"
+        "Приглашай друзей и получай бонусы!\n\n"
+        f"🔗 Твоя ссылка:\n<code>{ref_link}</code>\n\n"
+        "За каждого приглашённого друга — <b>10 звёзд</b> на твой счёт. 🌟"
+    )
+    back_kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_menu")]]
+    )
+    await callback.message.edit_text(text, reply_markup=back_kb)
+
+
+@dp.callback_query(F.data == "back_to_menu")
+async def back_to_menu_handler(callback: CallbackQuery) -> None:
+    await callback.answer()
+    user_name = html.bold(callback.from_user.full_name) if callback.from_user else "друг"
+    await callback.message.edit_text(
+        f"Привет, {user_name}! 👋\n\n"
+        f"Я бот-магазин. Выбери, что тебя интересует, с помощью кнопок ниже 👇",
+        reply_markup=get_main_menu(),
+    )
+
+
+@dp.message(Command("menu"))
+async def menu_handler(message: Message) -> None:
+    await message.answer("Главное меню:", reply_markup=get_main_menu())
+
 
 @dp.message()
 async def echo_handler(message: Message) -> None:
@@ -38,14 +125,17 @@ async def echo_handler(message: Message) -> None:
     else:
         await message.answer("Я понимаю только текст :)")
 
+
 # --- Настройка Webhook ---
 async def on_startup(bot: Bot):
     await bot.set_webhook(WEBHOOK_URL)
     logging.info(f"Webhook установлен на {WEBHOOK_URL}")
 
+
 async def on_shutdown(bot: Bot):
     await bot.delete_webhook()
     logging.warning("Завершение работы...")
+
 
 # --- Создание Aiohttp приложения ---
 def build_app() -> web.Application:
@@ -55,15 +145,23 @@ def build_app() -> web.Application:
     webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     webhook_requests_handler.register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
+
+    # Endpoint для UptimeRobot, чтобы сервис не засыпал
+    async def health_check(request):
+        return web.Response(text="OK")
+
+    app.router.add_get('/health', health_check)
+
     return app
+
 
 # --- Супервизор: бесконечный перезапуск при сбоях ---
 def run_forever():
+    import time
     while True:
         try:
             logging.info("Запуск веб-сервера...")
             web.run_app(build_app(), host="0.0.0.0", port=10000, handle_signals=False)
-            # Если сервер завершился нормально (без исключения) — тоже перезапускаем
             logging.warning("Сервер остановился. Перезапуск через 5 секунд...")
         except KeyboardInterrupt:
             logging.info("Получен сигнал остановки. Выход.")
@@ -72,9 +170,8 @@ def run_forever():
             logging.error(f"Сервер упал с ошибкой: {e}")
             logging.error(traceback.format_exc())
             logging.warning("Перезапуск через 5 секунд...")
-        # Небольшая пауза, чтобы не спамить в логи при мгновенных падениях
-        import time
         time.sleep(5)
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
