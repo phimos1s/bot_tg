@@ -211,20 +211,21 @@ async def on_shutdown(bot: Bot):
 
 # --- Создание Aiohttp приложения ---
 def build_app() -> web.Application:
+    app = web.Application()
+
+    # 1. СНАЧАЛА добавляем health check, чтобы он точно сработал
+    async def health_check(request):
+        return web.Response(text="OK")
+    
+    # add_get автоматически обрабатывает и HEAD-запросы в aiohttp
+    app.router.add_get('/health', health_check)
+
+    # 2. ПОТОМ настраиваем всё остальное для aiogram
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
-    app = web.Application()
     webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     webhook_requests_handler.register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
-
-    # Endpoint для UptimeRobot: обрабатываем и GET, и HEAD
-    async def health_check(request):
-        return web.Response(text="OK")
-
-    # Регистрируем оба метода для одного пути
-    app.router.add_route('GET', '/health', health_check)
-    app.router.add_route('HEAD', '/health', health_check)
 
     return app
 
