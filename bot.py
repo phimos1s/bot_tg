@@ -218,6 +218,7 @@ def build_app() -> web.Application:
     webhook_requests_handler.register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
 
+    # Добавляем простой эндпоинт для health-check
     async def health_check(request):
         return web.Response(text="OK")
 
