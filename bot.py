@@ -208,37 +208,28 @@ async def on_shutdown(bot: Bot):
 def build_app() -> web.Application:
     app = web.Application()
 
-    # ТЕСТ-МАРКЕР: если увидим это в логах — новый код точно запущен
-    logging.info("=== BUILD_APP v2: маршруты добавляются ===")
-
+    # СНАЧАЛА health-check с запретом кэширования,
+    # чтобы CDN Cloudflare не отдавал старый 404.
     async def health_check(request):
-        logging.info("=== /health ЗАПРОШЕН ===")
-        return web.Response(text="HEALTH_OK_V2")
+        return web.Response(
+            text="OK",
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
 
-    async def root_check(request):
-        logging.info("=== / ЗАПРОШЕН ===")
-        return web.Response(text="ROOT_OK_V2")
-
-    # Регистрируем ДО aiogram
     app.router.add_route('GET', '/health', health_check)
     app.router.add_route('HEAD', '/health', health_check)
-    app.router.add_route('GET', '/', root_check)
 
-    # Логируем список маршрутов после регистрации
-    for r in app.router.routes():
-        logging.info(f"Маршрут зарегистрирован: {r.method} {r.resource}")
-
-    # Потом aiogram
+    # ПОТОМ всё, что нужно для aiogram
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
+
     webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     webhook_requests_handler.register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
-
-    # Логируем список маршрутов ПОСЛЕ aiogram
-    logging.info("=== Маршруты после setup_application ===")
-    for r in app.router.routes():
-        logging.info(f"Маршрут: {r.method} {r.resource}")
 
     return app
 
@@ -246,10 +237,12 @@ def build_app() -> web.Application:
 # --- Супервизор: бесконечный перезапуск при сбоях ---
 def run_forever():
     import time
+    port = int(os.getenv("PORT", 10000))
+    logging.info(f"Запускаю на порту: {port}")
     while True:
         try:
             logging.info("Запуск веб-сервера...")
-            web.run_app(build_app(), host="0.0.0.0", port=10000, handle_signals=False)
+            web.run_app(build_app(), host="0.0.0.0", port=port, handle_signals=False)
             logging.warning("Сервер остановился. Перезапуск через 5 секунд...")
         except KeyboardInterrupt:
             logging.info("Получен сигнал остановки. Выход.")
