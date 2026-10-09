@@ -2,8 +2,6 @@ import asyncio
 import logging
 import os
 import traceback
-import hashlib
-import hmac
 from aiohttp import web
 from aiogram import Bot, Dispatcher, html, F
 from aiogram.client.default import DefaultBotProperties
@@ -14,11 +12,16 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from aiocryptopay import AioCryptoPay, Networks
 from aiocryptopay.models.update import Update as CryptoUpdate
 
+print(">>> 1. Все импорты загружены", flush=True)
+
 # --- Конфигурация ---
-TOKEN = os.getenv("8717747702:AAEVSzoUdkJA8opDiwlkh1LmiAhYygFvqvo")
-WEBHOOK_HOST = os.getenv("https://bot-tg-141n.onrender.com")
-CRYPTO_PAY_TOKEN = os.getenv("646017:AAZ36CYHM1ZLSRfn1lpCk4vyr6yDiy8SVAz")
+TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL")
+CRYPTO_PAY_TOKEN = os.getenv("CRYPTO_PAY_TOKEN")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "fgopf7879")
+
+print(f">>> 2. Переменные прочитаны. BOT_TOKEN={bool(TOKEN)}, "
+      f"WEBHOOK_HOST={bool(WEBHOOK_HOST)}, CRYPTO_PAY_TOKEN={bool(CRYPTO_PAY_TOKEN)}", flush=True)
 
 if not TOKEN:
     raise ValueError("Не задана переменная окружения BOT_TOKEN!")
@@ -35,14 +38,13 @@ CRYPTO_WEBHOOK_PATH = f"/crypto/{WEBHOOK_SECRET}"
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# Клиент CryptoPay. Для тестов используйте Networks.TEST_NET и @CryptoTestnetBot
-crypto = AioCryptoPay(token=CRYPTO_PAY_TOKEN, network=Networks.MAIN_NET)
+print(">>> 3. Bot и Dispatcher созданы", flush=True)
+
+# Клиент CryptoPay создаём лениво — в on_startup, чтобы деплой не висел,
+# если API CryptoPay недоступен.
+crypto: AioCryptoPay | None = None
 
 # --- Настройки товаров ---
-# Курс: сколько звёзд выдаём за 1 USDT (меняйте под себя)
-STARS_PER_USDT = 100
-
-# Пакеты: key -> (количество звёзд, цена в USDT, описание)
 STAR_PACKAGES = {
     "100": {"stars": 100, "price_usdt": 1.0, "title": "100 звёзд"},
     "180": {"stars": 180, "price_usdt": 1.8, "title": "180 звёзд"},
@@ -125,7 +127,7 @@ async def personal_cabinet_handler(callback: CallbackQuery) -> None:
     await callback.message.edit_text(text, reply_markup=get_main_menu())
 
 
-# --- Купить звёзды: список пакетов ---
+# --- Купить звёзды ---
 @dp.callback_query(F.data == "buy_stars")
 async def buy_stars_handler(callback: CallbackQuery) -> None:
     await callback.answer()
@@ -137,7 +139,6 @@ async def buy_stars_handler(callback: CallbackQuery) -> None:
     await callback.message.edit_text(text, reply_markup=get_stars_menu())
 
 
-# --- Выбор пакета: создание счёта в CryptoBot ---
 @dp.callback_query(F.data.startswith("buy_pkg_"))
 async def buy_package_handler(callback: CallbackQuery) -> None:
     await callback.answer()
@@ -151,18 +152,34 @@ async def buy_package_handler(callback: CallbackQuery) -> None:
         )
         return
 
+    if crypto is None:
+        await callback.message.edit_text(
+            "❌ Платёжный сервис временно недоступен. Попробуйте позже.",
+            reply_markup=get_back_to_stars_kb(),
+        )
+        return
+
     user_id = callback.from_user.id
 
     try:
-        # Создаём счёт в CryptoBot
-        invoice = await crypto.create_invoice(
-            asset="USDT",
-            amount=pkg["price_usdt"],
-            description=f"Покупка {pkg['title']}",
-            payload=f"user_{user_id}_pkg_{key}",
-            paid_btn_name="callback",
-            paid_btn_url=WEBHOOK_HOST,
+        invoice = await asyncio.wait_for(
+            crypto.create_invoice(
+                asset="USDT",
+                amount=pkg["price_usdt"],
+                description=f"Покупка {pkg['title']}",
+                payload=f"user_{user_id}_pkg_{key}",
+                paid_btn_name="callback",
+                paid_btn_url=WEBHOOK_HOST,
+            ),
+            timeout=15,
         )
+    except asyncio.TimeoutError:
+        logging.error("Таймаут при создании счёта в CryptoPay")
+        await callback.message.edit_text(
+            "❌ Сервис оплаты не отвечает. Попробуйте позже.",
+            reply_markup=get_back_to_stars_kb(),
+        )
+        return
     except Exception as e:
         logging.error(f"Ошибка создания счёта: {e}")
         await callback.message.edit_text(
@@ -218,24 +235,20 @@ async def echo_handler(message: Message) -> None:
 
 
 # --- Обработчик оплаты от CryptoBot ---
-@crypto.pay_handler()
 async def invoice_paid_handler(update: CryptoUpdate, app=None) -> None:
-    """Вызывается, когда счёт оплачен."""
     logging.info(f"Получено обновление от CryptoPay: {update}")
     payload = update.payload or ""
 
     if update.status == "paid":
-        # Парсим payload: user_123_pkg_100
         try:
             parts = payload.split("_")
             user_id = int(parts[1])
             pkg_key = parts[3]
             stars_to_add = STAR_PACKAGES.get(pkg_key, {}).get("stars", 0)
 
-            # TODO: здесь нужно начислить звёзды в вашей БД
+            # TODO: здесь начислить звёзды в БД
             logging.info(f"Пользователь {user_id} оплатил пакет {pkg_key}. Начислено {stars_to_add} звёзд.")
 
-            # Уведомляем пользователя
             await bot.send_message(
                 user_id,
                 f"✅ Оплата получена!\n\n"
@@ -246,20 +259,54 @@ async def invoice_paid_handler(update: CryptoUpdate, app=None) -> None:
             logging.error(f"Ошибка обработки payload '{payload}': {e}")
 
 
+# --- Обёртка для вебхука CryptoPay (работает, даже если crypto ещё не готов) ---
+async def crypto_webhook_wrapper(request: web.Request) -> web.Response:
+    if crypto is None:
+        return web.Response(status=503, text="CryptoPay not ready")
+    return await crypto.get_updates(request)
+
+
 # --- Настройка Webhook ---
 async def on_startup(bot: Bot):
+    print(">>> 4. on_startup запущен", flush=True)
+    global crypto
+
+    # Ленивая инициализация CryptoPay с таймаутом
+    try:
+        crypto = await asyncio.wait_for(
+            asyncio.to_thread(AioCryptoPay, CRYPTO_PAY_TOKEN, Networks.MAIN_NET),
+            timeout=20,
+        )
+        # Регистрируем обработчик оплаты
+        crypto.pay_handlers[invoice_paid_handler.__name__] = invoice_paid_handler
+        logging.info("CryptoPay клиент создан и pay_handler зарегистрирован")
+    except asyncio.TimeoutError:
+        logging.error("Таймаут инициализации CryptoPay — сеть недоступна?")
+        crypto = None
+    except Exception as e:
+        logging.error(f"Ошибка инициализации CryptoPay: {e}")
+        crypto = None
+
+    # Устанавливаем вебхук для Telegram
+    print(f">>> 5. Устанавливаю Telegram webhook на {WEBHOOK_URL}", flush=True)
     await bot.set_webhook(WEBHOOK_URL)
     logging.info(f"Webhook установлен на {WEBHOOK_URL}")
+    print(">>> 6. on_startup завершён", flush=True)
 
 
 async def on_shutdown(bot: Bot):
     await bot.delete_webhook()
-    await crypto.close()
+    if crypto is not None:
+        try:
+            await crypto.close()
+        except Exception as e:
+            logging.warning(f"Ошибка при закрытии CryptoPay: {e}")
     logging.warning("Завершение работы...")
 
 
 # --- Создание Aiohttp приложения ---
 def build_app() -> web.Application:
+    print(">>> 7. build_app вызван", flush=True)
     app = web.Application()
 
     # 1. Health-check с запретом кэширования
@@ -277,7 +324,7 @@ def build_app() -> web.Application:
     app.router.add_route('HEAD', '/health', health_check)
 
     # 2. Маршрут для вебхуков от CryptoBot
-    app.router.add_post(CRYPTO_WEBHOOK_PATH, crypto.get_updates)
+    app.router.add_post(CRYPTO_WEBHOOK_PATH, crypto_webhook_wrapper)
 
     # 3. Обработчики aiogram
     dp.startup.register(on_startup)
@@ -287,6 +334,7 @@ def build_app() -> web.Application:
     webhook_requests_handler.register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
 
+    print(">>> 8. build_app завершён", flush=True)
     return app
 
 
@@ -294,6 +342,7 @@ def build_app() -> web.Application:
 def run_forever():
     import time
     port = int(os.getenv("PORT", 10000))
+    print(f">>> 9. run_forever стартовал. Порт: {port}", flush=True)
     logging.info(f"Запускаю на порту: {port}")
     while True:
         try:
@@ -312,4 +361,5 @@ def run_forever():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    print(">>> 0. Старт bot.py", flush=True)
     run_forever()
