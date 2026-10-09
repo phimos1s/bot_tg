@@ -213,8 +213,8 @@ def build_app() -> web.Application:
     async def health_check(request):
         return web.Response(text="OK")
 
-    app.router.add_route('GET', '/health', health_check)
-    app.router.add_route('HEAD', '/health', health_check)
+    app.router.add_route('GET', '/ping', health_check)
+    app.router.add_route('HEAD', '/ping', health_check)
 
     # 2. ПОТОМ всё, что нужно для aiogram
     dp.startup.register(on_startup)
