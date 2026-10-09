@@ -208,21 +208,37 @@ async def on_shutdown(bot: Bot):
 def build_app() -> web.Application:
     app = web.Application()
 
-    # 1. СНАЧАЛА регистрируем /health — до всех обработчиков aiogram,
-    #    чтобы его никто не перехватил.
+    # ТЕСТ-МАРКЕР: если увидим это в логах — новый код точно запущен
+    logging.info("=== BUILD_APP v2: маршруты добавляются ===")
+
     async def health_check(request):
-        return web.Response(text="OK")
+        logging.info("=== /health ЗАПРОШЕН ===")
+        return web.Response(text="HEALTH_OK_V2")
 
-    app.router.add_route('GET', '/ping', health_check)
-    app.router.add_route('HEAD', '/ping', health_check)
+    async def root_check(request):
+        logging.info("=== / ЗАПРОШЕН ===")
+        return web.Response(text="ROOT_OK_V2")
 
-    # 2. ПОТОМ всё, что нужно для aiogram
+    # Регистрируем ДО aiogram
+    app.router.add_route('GET', '/health', health_check)
+    app.router.add_route('HEAD', '/health', health_check)
+    app.router.add_route('GET', '/', root_check)
+
+    # Логируем список маршрутов после регистрации
+    for r in app.router.routes():
+        logging.info(f"Маршрут зарегистрирован: {r.method} {r.resource}")
+
+    # Потом aiogram
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
-
     webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     webhook_requests_handler.register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
+
+    # Логируем список маршрутов ПОСЛЕ aiogram
+    logging.info("=== Маршруты после setup_application ===")
+    for r in app.router.routes():
+        logging.info(f"Маршрут: {r.method} {r.resource}")
 
     return app
 
