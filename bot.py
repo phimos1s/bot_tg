@@ -29,7 +29,7 @@ dp = Dispatcher()
 # --- Обработчики ---
 @dp.message(CommandStart())
 async def command_start_handler(message: Message) -> None:
-    await message.answer(f"Привет, {html.bold(message.from_user.full_name)}! Бот работает через Webhook на Render.")
+    await message.answer(f"Привет, {html.bold(message.from_user.full_name)}! Я ТЕБЕ ЕБЛО СЛОМАЮ.")
 
 @dp.message()
 async def echo_handler(message: Message) -> None:
