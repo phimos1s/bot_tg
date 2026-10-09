@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import traceback
 from aiogram import Bot, Dispatcher, html
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -10,17 +11,13 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from aiohttp import web
 
 # --- Конфигурация ---
-# Токен берём из переменной окружения BOT_TOKEN (задаётся на Render)
 TOKEN = os.getenv("BOT_TOKEN")
-
-# Render автоматически подставляет URL вашего сервиса в RENDER_EXTERNAL_URL
 WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL")
 
-# Проверка, чтобы не запустился с пустыми значениями
 if not TOKEN:
     raise ValueError("Не задана переменная окружения BOT_TOKEN!")
 if not WEBHOOK_HOST:
-    raise ValueError("Не задана переменная окружения RENDER_EXTERNAL_URL! (Render обычно делает это сам)")
+    raise ValueError("Не задана переменная окружения RENDER_EXTERNAL_URL!")
 
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
@@ -51,7 +48,7 @@ async def on_shutdown(bot: Bot):
     logging.warning("Завершение работы...")
 
 # --- Создание Aiohttp приложения ---
-def main() -> web.Application:
+def build_app() -> web.Application:
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
     app = web.Application()
@@ -60,8 +57,25 @@ def main() -> web.Application:
     setup_application(app, dp, bot=bot)
     return app
 
+# --- Супервизор: бесконечный перезапуск при сбоях ---
+def run_forever():
+    while True:
+        try:
+            logging.info("Запуск веб-сервера...")
+            web.run_app(build_app(), host="0.0.0.0", port=10000, handle_signals=False)
+            # Если сервер завершился нормально (без исключения) — тоже перезапускаем
+            logging.warning("Сервер остановился. Перезапуск через 5 секунд...")
+        except KeyboardInterrupt:
+            logging.info("Получен сигнал остановки. Выход.")
+            break
+        except Exception as e:
+            logging.error(f"Сервер упал с ошибкой: {e}")
+            logging.error(traceback.format_exc())
+            logging.warning("Перезапуск через 5 секунд...")
+        # Небольшая пауза, чтобы не спамить в логи при мгновенных падениях
+        import time
+        time.sleep(5)
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    # ВАЖНО: Render требует порт 10000 по умолчанию.
-    # Если не указать его явно, Render будет постоянно перезапускать бота.
-    web.run_app(main(), host="0.0.0.0", port=10000)
+    run_forever()
