@@ -28,7 +28,6 @@ dp = Dispatcher()
 
 # --- Настройки товаров и оплаты ---
 # ⚠️ ЗАМЕНИТЕ эти ссылки на свои реальные ссылки на оплату
-# (например, из ЮKassa, Robokassa, CryptoBot, Telegram Stars и т.д.)
 STAR_PACKAGES = {
     "100": {
         "stars": 100,
@@ -60,7 +59,6 @@ def get_main_menu() -> InlineKeyboardMarkup:
 
 
 def get_stars_menu() -> InlineKeyboardMarkup:
-    """Меню выбора пакета звёзд."""
     buttons = []
     for key, pkg in STAR_PACKAGES.items():
         buttons.append([
@@ -114,7 +112,6 @@ async def back_to_menu_handler(callback: CallbackQuery) -> None:
 async def personal_cabinet_handler(callback: CallbackQuery) -> None:
     await callback.answer()
     user_id = callback.from_user.id
-    # TODO: подтянуть данные из БД
     text = (
         f"👤 <b>Личный кабинет</b>\n\n"
         f"🆔 Ваш ID: <code>{user_id}</code>\n"
@@ -125,7 +122,7 @@ async def personal_cabinet_handler(callback: CallbackQuery) -> None:
     await callback.message.edit_text(text, reply_markup=get_main_menu())
 
 
-# --- Купить звёзды: список пакетов ---
+# --- Купить звёзды ---
 @dp.callback_query(F.data == "buy_stars")
 async def buy_stars_handler(callback: CallbackQuery) -> None:
     await callback.answer()
@@ -137,7 +134,6 @@ async def buy_stars_handler(callback: CallbackQuery) -> None:
     await callback.message.edit_text(text, reply_markup=get_stars_menu())
 
 
-# --- Выбор конкретного пакета и ссылка на оплату ---
 @dp.callback_query(F.data.startswith("buy_pkg_"))
 async def buy_package_handler(callback: CallbackQuery) -> None:
     await callback.answer()
@@ -158,7 +154,6 @@ async def buy_package_handler(callback: CallbackQuery) -> None:
         f"После оплаты звёзды будут автоматически начислены на твой счёт."
     )
 
-    # Кнопка со ссылкой на оплату + навигация
     pay_kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=f"💳 Оплатить {pkg['price']}", url=pkg["pay_url"])],
@@ -213,16 +208,18 @@ async def on_shutdown(bot: Bot):
 def build_app() -> web.Application:
     app = web.Application()
 
-    # 1. СНАЧАЛА добавляем health check, чтобы он точно сработал
+    # 1. СНАЧАЛА регистрируем /health — до всех обработчиков aiogram,
+    #    чтобы его никто не перехватил.
     async def health_check(request):
         return web.Response(text="OK")
-    
-    # add_get автоматически обрабатывает и HEAD-запросы в aiohttp
-    app.router.add_get('/health', health_check)
 
-    # 2. ПОТОМ настраиваем всё остальное для aiogram
+    app.router.add_route('GET', '/health', health_check)
+    app.router.add_route('HEAD', '/health', health_check)
+
+    # 2. ПОТОМ всё, что нужно для aiogram
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
+
     webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     webhook_requests_handler.register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
