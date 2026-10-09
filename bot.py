@@ -26,20 +26,63 @@ WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
+# --- Настройки товаров и оплаты ---
+# ⚠️ ЗАМЕНИТЕ эти ссылки на свои реальные ссылки на оплату
+# (например, из ЮKassa, Robokassa, CryptoBot, Telegram Stars и т.д.)
+STAR_PACKAGES = {
+    "100": {
+        "stars": 100,
+        "price": "100 ₽",
+        "pay_url": "https://example.com/pay/100",  # ← ЗАМЕНИТЕ
+    },
+    "180": {
+        "stars": 180,
+        "price": "180 ₽",
+        "pay_url": "https://example.com/pay/180",  # ← ЗАМЕНИТЕ
+    },
+    "500": {
+        "stars": 500,
+        "price": "500 ₽",
+        "pay_url": "https://example.com/pay/500",  # ← ЗАМЕНИТЕ
+    },
+}
 
-# --- Главное меню (inline-клавиатура) ---
+
+# --- Клавиатуры ---
 def get_main_menu() -> InlineKeyboardMarkup:
-    keyboard = InlineKeyboardMarkup(
+    return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="personal_cabinet")],
             [InlineKeyboardButton(text="⭐ Купить звёзды", callback_data="buy_stars")],
             [InlineKeyboardButton(text="🤝 Реферальная система", callback_data="referral_system")],
         ]
     )
-    return keyboard
 
 
-# --- Обработчики ---
+def get_stars_menu() -> InlineKeyboardMarkup:
+    """Меню выбора пакета звёзд."""
+    buttons = []
+    for key, pkg in STAR_PACKAGES.items():
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"⭐ {pkg['stars']} звёзд — {pkg['price']}",
+                callback_data=f"buy_pkg_{key}",
+            )
+        ])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_back_to_stars_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ К выбору пакета", callback_data="buy_stars")],
+            [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu")],
+        ]
+    )
+
+
+# --- Главное меню ---
 @dp.message(CommandStart())
 async def command_start_handler(message: Message) -> None:
     user_name = html.bold(message.from_user.full_name) if message.from_user else "друг"
@@ -50,11 +93,28 @@ async def command_start_handler(message: Message) -> None:
     )
 
 
+@dp.message(Command("menu"))
+async def menu_handler(message: Message) -> None:
+    await message.answer("Главное меню:", reply_markup=get_main_menu())
+
+
+@dp.callback_query(F.data == "back_to_menu")
+async def back_to_menu_handler(callback: CallbackQuery) -> None:
+    await callback.answer()
+    user_name = html.bold(callback.from_user.full_name) if callback.from_user else "друг"
+    await callback.message.edit_text(
+        f"Привет, {user_name}! 👋\n\n"
+        f"Я бот-магазин. Выбери, что тебя интересует, с помощью кнопок ниже 👇",
+        reply_markup=get_main_menu(),
+    )
+
+
+# --- Личный кабинет ---
 @dp.callback_query(F.data == "personal_cabinet")
 async def personal_cabinet_handler(callback: CallbackQuery) -> None:
-    await callback.answer()  # убираем «часики» на кнопке
+    await callback.answer()
     user_id = callback.from_user.id
-    # TODO: здесь можно подтянуть данные пользователя из БД
+    # TODO: подтянуть данные из БД
     text = (
         f"👤 <b>Личный кабинет</b>\n\n"
         f"🆔 Ваш ID: <code>{user_id}</code>\n"
@@ -65,29 +125,56 @@ async def personal_cabinet_handler(callback: CallbackQuery) -> None:
     await callback.message.edit_text(text, reply_markup=get_main_menu())
 
 
+# --- Купить звёзды: список пакетов ---
 @dp.callback_query(F.data == "buy_stars")
 async def buy_stars_handler(callback: CallbackQuery) -> None:
     await callback.answer()
     text = (
         "⭐ <b>Купить звёзды</b>\n\n"
-        "Здесь будет список товаров. Например:\n\n"
-        "• 50 звёзд — 100 ₽\n"
-        "• 100 звёзд — 180 ₽\n"
-        "• 500 звёзд — 800 ₽\n\n"
-        "🔧 Раздел в разработке. Скоро будет доступен!"
+        "Выбери подходящий пакет 👇\n\n"
+        "💡 Чем больше пакет — тем выгоднее цена за звезду."
     )
-    # Кнопка «Назад» для возврата в меню
-    back_kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_menu")]]
-    )
-    await callback.message.edit_text(text, reply_markup=back_kb)
+    await callback.message.edit_text(text, reply_markup=get_stars_menu())
 
 
+# --- Выбор конкретного пакета и ссылка на оплату ---
+@dp.callback_query(F.data.startswith("buy_pkg_"))
+async def buy_package_handler(callback: CallbackQuery) -> None:
+    await callback.answer()
+    key = callback.data.replace("buy_pkg_", "")
+    pkg = STAR_PACKAGES.get(key)
+
+    if not pkg:
+        await callback.message.edit_text(
+            "❌ Такого пакета не существует.",
+            reply_markup=get_back_to_stars_kb(),
+        )
+        return
+
+    text = (
+        f"⭐ <b>Пакет: {pkg['stars']} звёзд</b>\n\n"
+        f"💰 Стоимость: <b>{pkg['price']}</b>\n\n"
+        f"Нажми на кнопку ниже, чтобы перейти к оплате 👇\n\n"
+        f"После оплаты звёзды будут автоматически начислены на твой счёт."
+    )
+
+    # Кнопка со ссылкой на оплату + навигация
+    pay_kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"💳 Оплатить {pkg['price']}", url=pkg["pay_url"])],
+            [InlineKeyboardButton(text="⬅️ К выбору пакета", callback_data="buy_stars")],
+            [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu")],
+        ]
+    )
+
+    await callback.message.edit_text(text, reply_markup=pay_kb)
+
+
+# --- Реферальная система ---
 @dp.callback_query(F.data == "referral_system")
 async def referral_handler(callback: CallbackQuery) -> None:
     await callback.answer()
     user_id = callback.from_user.id
-    # Формируем реферальную ссылку
     bot_info = await bot.get_me()
     ref_link = f"https://t.me/{bot_info.username}?start=ref_{user_id}"
     text = (
@@ -102,22 +189,7 @@ async def referral_handler(callback: CallbackQuery) -> None:
     await callback.message.edit_text(text, reply_markup=back_kb)
 
 
-@dp.callback_query(F.data == "back_to_menu")
-async def back_to_menu_handler(callback: CallbackQuery) -> None:
-    await callback.answer()
-    user_name = html.bold(callback.from_user.full_name) if callback.from_user else "друг"
-    await callback.message.edit_text(
-        f"Привет, {user_name}! 👋\n\n"
-        f"Я бот-магазин. Выбери, что тебя интересует, с помощью кнопок ниже 👇",
-        reply_markup=get_main_menu(),
-    )
-
-
-@dp.message(Command("menu"))
-async def menu_handler(message: Message) -> None:
-    await message.answer("Главное меню:", reply_markup=get_main_menu())
-
-
+# --- Эхо-хэндлер (заглушка) ---
 @dp.message()
 async def echo_handler(message: Message) -> None:
     if message.text:
@@ -146,7 +218,6 @@ def build_app() -> web.Application:
     webhook_requests_handler.register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
 
-    # Endpoint для UptimeRobot, чтобы сервис не засыпал
     async def health_check(request):
         return web.Response(text="OK")
 
