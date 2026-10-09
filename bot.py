@@ -40,7 +40,6 @@ dp = Dispatcher()
 
 print(">>> 3. Bot и Dispatcher созданы", flush=True)
 
-# Клиент CryptoPay создаётся в on_startup
 crypto: AioCryptoPay | None = None
 
 # --- Настройки товаров ---
@@ -233,36 +232,51 @@ async def echo_handler(message: Message) -> None:
         await message.answer("Я понимаю только текст :)")
 
 
-# --- Обработчик оплаты от CryptoBot ---
-async def invoice_paid_handler(update: CryptoUpdate, app=None) -> None:
-    logging.info(f"Получено обновление от CryptoPay: {update}")
-    payload = update.payload or ""
+# --- Обработка вебхука от CryptoPay (вручную) ---
+async def handle_crypto_webhook(request: web.Request) -> web.Response:
+    """
+    Принимает POST-запросы от CryptoPay, парсит JSON и вызывает
+    логику начисления звёзд.
+    """
+    try:
+        data = await request.json()
+    except Exception as e:
+        logging.error(f"Не удалось прочитать JSON от CryptoPay: {e}")
+        return web.Response(status=400, text="Bad Request")
 
-    if update.status == "paid":
-        try:
-            parts = payload.split("_")
-            user_id = int(parts[1])
-            pkg_key = parts[3]
-            stars_to_add = STAR_PACKAGES.get(pkg_key, {}).get("stars", 0)
+    logging.info(f"Получен вебхук от CryptoPay: {data}")
 
-            # TODO: здесь начислить звёзды в БД
-            logging.info(f"Пользователь {user_id} оплатил пакет {pkg_key}. Начислено {stars_to_add} звёзд.")
+    # CryptoPay присылает update_type, например "invoice_paid"
+    update_type = data.get("update_type")
+    if update_type != "invoice_paid":
+        return web.Response(text="OK")  # игнорируем другие типы
 
-            await bot.send_message(
-                user_id,
-                f"✅ Оплата получена!\n\n"
-                f"⭐ Вам начислено <b>{stars_to_add} звёзд</b>.\n"
-                f"Спасибо за покупку! 🙌"
-            )
-        except Exception as e:
-            logging.error(f"Ошибка обработки payload '{payload}': {e}")
+    payload = data.get("payload", "")
+    status = data.get("status")
 
+    if status != "paid":
+        return web.Response(text="OK")
 
-# --- Обёртка для вебхука CryptoPay ---
-async def crypto_webhook_wrapper(request: web.Request) -> web.Response:
-    if crypto is None:
-        return web.Response(status=503, text="CryptoPay not ready")
-    return await crypto.get_updates(request)
+    # Парсим payload: user_123_pkg_100
+    try:
+        parts = payload.split("_")
+        user_id = int(parts[1])
+        pkg_key = parts[3]
+        stars_to_add = STAR_PACKAGES.get(pkg_key, {}).get("stars", 0)
+
+        # TODO: здесь начислить звёзды в БД
+        logging.info(f"Пользователь {user_id} оплатил пакет {pkg_key}. Начислено {stars_to_add} звёзд.")
+
+        await bot.send_message(
+            user_id,
+            f"✅ Оплата получена!\n\n"
+            f"⭐ Вам начислено <b>{stars_to_add} звёзд</b>.\n"
+            f"Спасибо за покупку! 🙌"
+        )
+    except Exception as e:
+        logging.error(f"Ошибка обработки payload '{payload}': {e}")
+
+    return web.Response(text="OK")
 
 
 # --- Настройка Webhook ---
@@ -270,11 +284,10 @@ async def on_startup(bot: Bot):
     print(">>> 4. on_startup запущен", flush=True)
     global crypto
 
-    # Инициализация CryptoPay в текущем event loop (без to_thread!)
+    # Инициализация CryptoPay
     try:
         crypto = AioCryptoPay(token=CRYPTO_PAY_TOKEN, network=Networks.MAIN_NET)
-        crypto.pay_handlers[invoice_paid_handler.__name__] = invoice_paid_handler
-        logging.info("CryptoPay клиент создан и pay_handler зарегистрирован")
+        logging.info("CryptoPay клиент создан")
     except Exception as e:
         logging.error(f"Ошибка инициализации CryptoPay: {e}")
         crypto = None
@@ -313,7 +326,8 @@ def build_app() -> web.Application:
     app.router.add_route('GET', '/health', health_check)
     app.router.add_route('HEAD', '/health', health_check)
 
-    app.router.add_post(CRYPTO_WEBHOOK_PATH, crypto_webhook_wrapper)
+    # Свой обработчик вебхуков от CryptoPay
+    app.router.add_post(CRYPTO_WEBHOOK_PATH, handle_crypto_webhook)
 
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
