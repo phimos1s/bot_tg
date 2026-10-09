@@ -40,8 +40,7 @@ dp = Dispatcher()
 
 print(">>> 3. Bot и Dispatcher созданы", flush=True)
 
-# Клиент CryptoPay создаём лениво — в on_startup, чтобы деплой не висел,
-# если API CryptoPay недоступен.
+# Клиент CryptoPay создаётся в on_startup
 crypto: AioCryptoPay | None = None
 
 # --- Настройки товаров ---
@@ -259,7 +258,7 @@ async def invoice_paid_handler(update: CryptoUpdate, app=None) -> None:
             logging.error(f"Ошибка обработки payload '{payload}': {e}")
 
 
-# --- Обёртка для вебхука CryptoPay (работает, даже если crypto ещё не готов) ---
+# --- Обёртка для вебхука CryptoPay ---
 async def crypto_webhook_wrapper(request: web.Request) -> web.Response:
     if crypto is None:
         return web.Response(status=503, text="CryptoPay not ready")
@@ -271,23 +270,15 @@ async def on_startup(bot: Bot):
     print(">>> 4. on_startup запущен", flush=True)
     global crypto
 
-    # Ленивая инициализация CryptoPay с таймаутом
+    # Инициализация CryptoPay в текущем event loop (без to_thread!)
     try:
-        crypto = await asyncio.wait_for(
-            asyncio.to_thread(AioCryptoPay, CRYPTO_PAY_TOKEN, Networks.MAIN_NET),
-            timeout=20,
-        )
-        # Регистрируем обработчик оплаты
+        crypto = AioCryptoPay(token=CRYPTO_PAY_TOKEN, network=Networks.MAIN_NET)
         crypto.pay_handlers[invoice_paid_handler.__name__] = invoice_paid_handler
         logging.info("CryptoPay клиент создан и pay_handler зарегистрирован")
-    except asyncio.TimeoutError:
-        logging.error("Таймаут инициализации CryptoPay — сеть недоступна?")
-        crypto = None
     except Exception as e:
         logging.error(f"Ошибка инициализации CryptoPay: {e}")
         crypto = None
 
-    # Устанавливаем вебхук для Telegram
     print(f">>> 5. Устанавливаю Telegram webhook на {WEBHOOK_URL}", flush=True)
     await bot.set_webhook(WEBHOOK_URL)
     logging.info(f"Webhook установлен на {WEBHOOK_URL}")
@@ -309,7 +300,6 @@ def build_app() -> web.Application:
     print(">>> 7. build_app вызван", flush=True)
     app = web.Application()
 
-    # 1. Health-check с запретом кэширования
     async def health_check(request):
         return web.Response(
             text="OK",
@@ -323,10 +313,8 @@ def build_app() -> web.Application:
     app.router.add_route('GET', '/health', health_check)
     app.router.add_route('HEAD', '/health', health_check)
 
-    # 2. Маршрут для вебхуков от CryptoBot
     app.router.add_post(CRYPTO_WEBHOOK_PATH, crypto_webhook_wrapper)
 
-    # 3. Обработчики aiogram
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
@@ -338,7 +326,7 @@ def build_app() -> web.Application:
     return app
 
 
-# --- Супервизор: бесконечный перезапуск при сбоях ---
+# --- Супервизор ---
 def run_forever():
     import time
     port = int(os.getenv("PORT", 10000))
