@@ -218,12 +218,12 @@ def build_app() -> web.Application:
     webhook_requests_handler.register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
 
-    # Endpoint для UptimeRobot (поддерживает и GET, и HEAD)
+    # Endpoint для UptimeRobot.
+    # aiohttp автоматически обрабатывает и GET, и HEAD для этого маршрута.
     async def health_check(request):
         return web.Response(text="OK")
 
     app.router.add_get('/health', health_check)
-    app.router.add_head('/health', health_check)  # ← Добавьте эту строку
 
     return app
 
