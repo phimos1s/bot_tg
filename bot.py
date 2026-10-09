@@ -2,48 +2,51 @@ import asyncio
 import logging
 import os
 import traceback
+import hashlib
+import hmac
+from aiohttp import web
 from aiogram import Bot, Dispatcher, html, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from aiohttp import web
+from aiocryptopay import AioCryptoPay, Networks
+from aiocryptopay.models.update import Update as CryptoUpdate
 
 # --- Конфигурация ---
 TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL")
+CRYPTO_PAY_TOKEN = os.getenv("CRYPTO_PAY_TOKEN")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "my_secret_path_2026")
 
 if not TOKEN:
     raise ValueError("Не задана переменная окружения BOT_TOKEN!")
 if not WEBHOOK_HOST:
     raise ValueError("Не задана переменная окружения RENDER_EXTERNAL_URL!")
+if not CRYPTO_PAY_TOKEN:
+    raise ValueError("Не задана переменная окружения CRYPTO_PAY_TOKEN!")
 
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+CRYPTO_WEBHOOK_PATH = f"/crypto/{WEBHOOK_SECRET}"
 
 # --- Инициализация ---
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# --- Настройки товаров и оплаты ---
-# ⚠️ ЗАМЕНИТЕ эти ссылки на свои реальные ссылки на оплату
+# Клиент CryptoPay. Для тестов используйте Networks.TEST_NET и @CryptoTestnetBot
+crypto = AioCryptoPay(token=CRYPTO_PAY_TOKEN, network=Networks.MAIN_NET)
+
+# --- Настройки товаров ---
+# Курс: сколько звёзд выдаём за 1 USDT (меняйте под себя)
+STARS_PER_USDT = 100
+
+# Пакеты: key -> (количество звёзд, цена в USDT, описание)
 STAR_PACKAGES = {
-    "100": {
-        "stars": 100,
-        "price": "100 ₽",
-        "pay_url": "https://example.com/pay/100",  # ← ЗАМЕНИТЕ
-    },
-    "180": {
-        "stars": 180,
-        "price": "180 ₽",
-        "pay_url": "https://example.com/pay/180",  # ← ЗАМЕНИТЕ
-    },
-    "500": {
-        "stars": 500,
-        "price": "500 ₽",
-        "pay_url": "https://example.com/pay/500",  # ← ЗАМЕНИТЕ
-    },
+    "100": {"stars": 100, "price_usdt": 1.0, "title": "100 звёзд"},
+    "180": {"stars": 180, "price_usdt": 1.8, "title": "180 звёзд"},
+    "500": {"stars": 500, "price_usdt": 5.0, "title": "500 звёзд"},
 }
 
 
@@ -63,7 +66,7 @@ def get_stars_menu() -> InlineKeyboardMarkup:
     for key, pkg in STAR_PACKAGES.items():
         buttons.append([
             InlineKeyboardButton(
-                text=f"⭐ {pkg['stars']} звёзд — {pkg['price']}",
+                text=f"⭐ {pkg['stars']} звёзд — {pkg['price_usdt']} USDT",
                 callback_data=f"buy_pkg_{key}",
             )
         ])
@@ -122,18 +125,19 @@ async def personal_cabinet_handler(callback: CallbackQuery) -> None:
     await callback.message.edit_text(text, reply_markup=get_main_menu())
 
 
-# --- Купить звёзды ---
+# --- Купить звёзды: список пакетов ---
 @dp.callback_query(F.data == "buy_stars")
 async def buy_stars_handler(callback: CallbackQuery) -> None:
     await callback.answer()
     text = (
         "⭐ <b>Купить звёзды</b>\n\n"
         "Выбери подходящий пакет 👇\n\n"
-        "💡 Чем больше пакет — тем выгоднее цена за звезду."
+        "💡 Оплата принимается в криптовалюте (USDT, TON и др.)."
     )
     await callback.message.edit_text(text, reply_markup=get_stars_menu())
 
 
+# --- Выбор пакета: создание счёта в CryptoBot ---
 @dp.callback_query(F.data.startswith("buy_pkg_"))
 async def buy_package_handler(callback: CallbackQuery) -> None:
     await callback.answer()
@@ -147,16 +151,36 @@ async def buy_package_handler(callback: CallbackQuery) -> None:
         )
         return
 
+    user_id = callback.from_user.id
+
+    try:
+        # Создаём счёт в CryptoBot
+        invoice = await crypto.create_invoice(
+            asset="USDT",
+            amount=pkg["price_usdt"],
+            description=f"Покупка {pkg['title']}",
+            payload=f"user_{user_id}_pkg_{key}",
+            paid_btn_name="callback",
+            paid_btn_url=WEBHOOK_HOST,
+        )
+    except Exception as e:
+        logging.error(f"Ошибка создания счёта: {e}")
+        await callback.message.edit_text(
+            "❌ Не удалось создать счёт. Попробуйте позже.",
+            reply_markup=get_back_to_stars_kb(),
+        )
+        return
+
     text = (
         f"⭐ <b>Пакет: {pkg['stars']} звёзд</b>\n\n"
-        f"💰 Стоимость: <b>{pkg['price']}</b>\n\n"
+        f"💰 Стоимость: <b>{pkg['price_usdt']} USDT</b>\n\n"
         f"Нажми на кнопку ниже, чтобы перейти к оплате 👇\n\n"
         f"После оплаты звёзды будут автоматически начислены на твой счёт."
     )
 
     pay_kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=f"💳 Оплатить {pkg['price']}", url=pkg["pay_url"])],
+            [InlineKeyboardButton(text=f"💳 Оплатить {pkg['price_usdt']} USDT", url=invoice.bot_invoice_url)],
             [InlineKeyboardButton(text="⬅️ К выбору пакета", callback_data="buy_stars")],
             [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu")],
         ]
@@ -193,6 +217,35 @@ async def echo_handler(message: Message) -> None:
         await message.answer("Я понимаю только текст :)")
 
 
+# --- Обработчик оплаты от CryptoBot ---
+@crypto.pay_handler()
+async def invoice_paid_handler(update: CryptoUpdate, app=None) -> None:
+    """Вызывается, когда счёт оплачен."""
+    logging.info(f"Получено обновление от CryptoPay: {update}")
+    payload = update.payload or ""
+
+    if update.status == "paid":
+        # Парсим payload: user_123_pkg_100
+        try:
+            parts = payload.split("_")
+            user_id = int(parts[1])
+            pkg_key = parts[3]
+            stars_to_add = STAR_PACKAGES.get(pkg_key, {}).get("stars", 0)
+
+            # TODO: здесь нужно начислить звёзды в вашей БД
+            logging.info(f"Пользователь {user_id} оплатил пакет {pkg_key}. Начислено {stars_to_add} звёзд.")
+
+            # Уведомляем пользователя
+            await bot.send_message(
+                user_id,
+                f"✅ Оплата получена!\n\n"
+                f"⭐ Вам начислено <b>{stars_to_add} звёзд</b>.\n"
+                f"Спасибо за покупку! 🙌"
+            )
+        except Exception as e:
+            logging.error(f"Ошибка обработки payload '{payload}': {e}")
+
+
 # --- Настройка Webhook ---
 async def on_startup(bot: Bot):
     await bot.set_webhook(WEBHOOK_URL)
@@ -201,6 +254,7 @@ async def on_startup(bot: Bot):
 
 async def on_shutdown(bot: Bot):
     await bot.delete_webhook()
+    await crypto.close()
     logging.warning("Завершение работы...")
 
 
@@ -208,8 +262,7 @@ async def on_shutdown(bot: Bot):
 def build_app() -> web.Application:
     app = web.Application()
 
-    # СНАЧАЛА health-check с запретом кэширования,
-    # чтобы CDN Cloudflare не отдавал старый 404.
+    # 1. Health-check с запретом кэширования
     async def health_check(request):
         return web.Response(
             text="OK",
@@ -223,7 +276,10 @@ def build_app() -> web.Application:
     app.router.add_route('GET', '/health', health_check)
     app.router.add_route('HEAD', '/health', health_check)
 
-    # ПОТОМ всё, что нужно для aiogram
+    # 2. Маршрут для вебхуков от CryptoBot
+    app.router.add_post(CRYPTO_WEBHOOK_PATH, crypto.get_updates)
+
+    # 3. Обработчики aiogram
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
